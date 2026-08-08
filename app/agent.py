@@ -63,7 +63,7 @@ TOOLS = [
     }
 ]
 
-SYSTEM_PROMPT = """You are a deployment safety advisor for Oracle Cloud Infrastructure.
+SYSTEM_PROMPT = """You are a deployment safety advisor.
 
 Your job is to evaluate whether a deployment is safe to proceed.
 
