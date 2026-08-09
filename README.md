@@ -6,20 +6,21 @@ states, change freeze windows, and deployment history before returning
 a structured go/no-go verdict.
 
 ## Architecture
-POST /evaluate-deployment
-↓
-FastAPI receives request
-↓
-GPT-4o-mini agent reasons about the deployment
-↓
-Agent calls 3 tools autonomously:
-├── check_active_alerts(service_id)
-├── check_change_freeze(region)
-└── get_recent_deployments(service_id)
-↓
-Synthesises verdict across all evidence
-↓
-Returns structured JSON: verdict, risk_score, reasons, actions
+
+```mermaid
+sequenceDiagram
+    autonumber
+    Client->>FastAPI: POST /evaluate-deployment
+    FastAPI->>Agent (LLM): Reason about deployment request
+    loop Autonomously call tools
+        Agent (LLM)->>Database/Tools: check_active_alerts(service_id)
+        Agent (LLM)->>Database/Tools: check_change_freeze(region)
+        Agent (LLM)->>Database/Tools: get_recent_deployments(service_id)
+    end
+    Agent (LLM)->>Agent (LLM): Synthesise evidence
+    Agent (LLM)->>FastAPI: Return structured verdict
+    FastAPI->>Client: Return DeploymentVerdict JSON
+```
 
 ## Example
 
@@ -52,6 +53,16 @@ Output:
   ]
 }
 ```
+
+## Sample Evaluation Results
+
+| Service                | Verdict | Risk |
+|------------------------|---------|------|
+| payments-service       | NO_GO   | 75 |
+| auth-service           | NO_GO   | 85 |
+| notification-svc       | GO      | 0 |
+| config-manager         | GO      | 10 |
+| deployment-svc         | GO      | 10 |
 
 ## Design decisions
 

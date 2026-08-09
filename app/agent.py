@@ -142,5 +142,8 @@ Check all safety conditions and return your verdict."""
 
         else:
             verdict_json = message.content.strip()
-            verdict_data = json.loads(verdict_json)
-            return DeploymentVerdict(**verdict_data)
+            try:
+                verdict_data = json.loads(verdict_json)
+                return DeploymentVerdict(**verdict_data)
+            except json.JSONDecodeError:
+                raise ValueError(f"Agent returned invalid JSON: {verdict_json}")
