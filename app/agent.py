@@ -3,65 +3,24 @@ import os
 from openai import OpenAI
 from dotenv import load_dotenv
 from app.models import DeploymentRequest, DeploymentVerdict
-from app.tools import check_active_alerts, check_change_freeze, get_recent_deployments
+from app.registry import registry
+import app.tools # Ensure tools are imported and registered
 
 load_dotenv()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "check_active_alerts",
-            "description": "Check if there are active alerts for a service",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "service_id": {
-                        "type": "string",
-                        "description": "The service ID to check alerts for"
-                    }
-                },
-                "required": ["service_id"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "check_change_freeze",
-            "description": "Check if a change freeze is active for a region",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "region": {
-                        "type": "string",
-                        "description": "The region to check freeze window for"
-                    }
-                },
-                "required": ["region"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_recent_deployments",
-            "description": "Get recent deployment history for a service",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "service_id": {
-                        "type": "string",
-                        "description": "The service ID to get deployment history for"
-                    }
-                },
-                "required": ["service_id"]
-            }
-        }
-    }
-]
+def get_llm_client() -> tuple[OpenAI, str]:
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    if provider == "gemini":
+        api_key = os.getenv("GOOGLE_API_KEY")
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    else:
+        api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")  # default is None (OpenAI main endpoint)
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    return client, model
 
 SYSTEM_PROMPT = """You are a deployment safety advisor.
 
@@ -83,19 +42,11 @@ After checking all three, return a JSON verdict with this exact structure:
 
 Return ONLY the JSON. No other text."""
 
-def run_tool(tool_name: str, tool_args: dict) -> str:
-    if tool_name == "check_active_alerts":
-        result = check_active_alerts(**tool_args)
-    elif tool_name == "check_change_freeze":
-        result = check_change_freeze(**tool_args)
-    elif tool_name == "get_recent_deployments":
-        result = get_recent_deployments(**tool_args)
-    else:
-        result = {"error": f"Unknown tool: {tool_name}"}
-    return json.dumps(result)
-
 def evaluate_deployment(request: DeploymentRequest) -> DeploymentVerdict:
     print(f"\nEvaluating deployment: {request.service_name} {request.version} -> {request.target_region}")
+
+    client, model = get_llm_client()
+    tools = registry.get_schemas()
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -114,10 +65,10 @@ Check all safety conditions and return your verdict."""
 
     while True:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=messages,
-            tools=TOOLS,
-            tool_choice="auto"
+            tools=tools if tools else None,
+            tool_choice="auto" if tools else None
         )
 
         message = response.choices[0].message
@@ -131,17 +82,31 @@ Check all safety conditions and return your verdict."""
                 tool_args = json.loads(tool_call.function.arguments)
                 print(f"  Calling tool: {tool_name}({tool_args})")
 
-                tool_result = run_tool(tool_name, tool_args)
-                print(f"  Tool result: {tool_result}")
+                try:
+                    tool_result = registry.execute(tool_name, **tool_args)
+                    tool_result_str = json.dumps(tool_result)
+                except Exception as e:
+                    tool_result_str = json.dumps({"error": str(e)})
+
+                print(f"  Tool result: {tool_result_str}")
 
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": tool_result
+                    "content": tool_result_str
                 })
 
         else:
             verdict_json = message.content.strip()
+            # Clean up potential markdown formatting block wrapper returned by some LLMs
+            if verdict_json.startswith("```"):
+                lines = verdict_json.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                verdict_json = "\n".join(lines).strip()
+
             try:
                 verdict_data = json.loads(verdict_json)
                 return DeploymentVerdict(**verdict_data)

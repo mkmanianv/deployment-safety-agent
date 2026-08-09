@@ -64,6 +64,21 @@ Output:
 | config-manager         | GO      | 10 |
 | deployment-svc         | GO      | 10 |
 
+## Platform Extensibility
+
+The framework has been redesigned into an extensible **Deployment Safety Platform** supporting plug-and-play components:
+
+### 1. Database Adapters
+Data retrieval is abstracted using the `DatabaseAdapter` Protocol. To integrate a new database (e.g., Postgres, MongoDB, Mock):
+1. Implement the `DatabaseAdapter` protocol (see [database.py](file:///c:/Users/Manian%20Personal/Documents/deployment-safety-agent/app/database.py)).
+2. Call `set_db(your_custom_adapter)` in your application initialization to register it.
+
+### 2. Custom Tool Registration
+Developers can add custom safety checkers (tools) without modifying the core agent logic:
+1. Define a python function.
+2. Annotate it using the `@registry.register(...)` decorator, providing a name, description, and the parameters schema.
+3. The LLM agent will dynamically pick up the new tool, include it in its decision-making loop, and invoke it when appropriate.
+
 ## Design decisions
 
 **Why tool calling over a single prompt?**
@@ -78,10 +93,10 @@ on every response — if the model hallucinates a field or
 returns wrong types, it fails loudly rather than silently 
 corrupting downstream systems.
 
-**Why SQLite for mock data?**
+**Why SQLite for default mock data?**
 Zero infrastructure overhead. The same pattern works with 
 any database behind the tool functions — swap SQLite for 
-Postgres or Oracle DB without changing agent logic.
+Postgres or Oracle DB by implementing a custom `DatabaseAdapter` without changing agent logic.
 
 ## Setup
 

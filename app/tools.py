@@ -1,60 +1,82 @@
-import sqlite3
+import os
 from pathlib import Path
-from datetime import datetime
+from app.database import SQLiteAdapter, DatabaseAdapter
+from app.registry import registry
 
+# Instantiate default database adapter (can be overridden dynamically)
 DB_PATH = Path(__file__).parent.parent / "data" / "incidents.db"
+_default_db: DatabaseAdapter = SQLiteAdapter(str(DB_PATH))
 
-def get_db():
-    return sqlite3.connect(str(DB_PATH))
+def get_db() -> DatabaseAdapter:
+    return _default_db
 
+def set_db(db: DatabaseAdapter):
+    global _default_db
+    _default_db = db
+
+@registry.register(
+    name="check_active_alerts",
+    description="Check if there are active alerts for a service",
+    parameters={
+        "type": "object",
+        "properties": {
+            "service_id": {
+                "type": "string",
+                "description": "The service ID to check alerts for"
+            }
+        },
+        "required": ["service_id"]
+    }
+)
 def check_active_alerts(service_id: str) -> dict:
-    conn = get_db()
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT id, type, message, fired_at FROM alerts "
-        "WHERE service_id=? AND resolved=0",
-        (service_id,)
-    ).fetchall()
-    conn.close()
-    alerts = [
-        {"id": r[0], "type": r[1], "message": r[2], "fired_at": r[3]}
-        for r in rows
-    ]
+    db = get_db()
+    alerts = db.get_active_alerts(service_id)
     return {
         "service_id": service_id,
         "active_alert_count": len(alerts),
         "alerts": alerts
     }
 
+@registry.register(
+    name="check_change_freeze",
+    description="Check if a change freeze is active for a region",
+    parameters={
+        "type": "object",
+        "properties": {
+            "region": {
+                "type": "string",
+                "description": "The region to check freeze window for"
+            }
+        },
+        "required": ["region"]
+    }
+)
 def check_change_freeze(region: str) -> dict:
-    conn = get_db()
-    cur = conn.cursor()
-    now = datetime.now().isoformat()
-    rows = cur.execute(
-        "SELECT id, reason, start_time, end_time FROM change_freezes "
-        "WHERE region=? AND start_time<=? AND end_time>=?",
-        (region, now, now)
-    ).fetchall()
-    conn.close()
+    db = get_db()
+    freezes = db.get_change_freeze(region)
     return {
         "region": region,
-        "freeze_active": len(rows) > 0,
-        "reason": rows[0][1] if rows else None
+        "freeze_active": len(freezes) > 0,
+        "reason": freezes[0]["reason"] if freezes else None
     }
 
+@registry.register(
+    name="get_recent_deployments",
+    description="Get recent deployment history for a service",
+    parameters={
+        "type": "object",
+        "properties": {
+            "service_id": {
+                "type": "string",
+                "description": "The service ID to get deployment history for"
+            }
+        },
+        "required": ["service_id"]
+    }
+)
 def get_recent_deployments(service_id: str) -> dict:
-    conn = get_db()
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT id, version, deployed_at, outcome FROM deployments "
-        "WHERE service_id=? ORDER BY deployed_at DESC LIMIT 5",
-        (service_id,)
-    ).fetchall()
-    conn.close()
-    deployments = [
-        {"id": r[0], "version": r[1], "deployed_at": r[2], "outcome": r[3]}
-        for r in rows
-    ]
+    db = get_db()
+    deployments = db.get_recent_deployments(service_id)
     recent_failures = sum(1 for d in deployments if d["outcome"] == "failed")
     return {
         "service_id": service_id,
